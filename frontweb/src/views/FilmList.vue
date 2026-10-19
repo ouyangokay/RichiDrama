@@ -86,6 +86,10 @@
       </div>
     </main>
 
+    <footer class="site-footer" aria-label="网站备案信息">
+      <SiteIcpLink />
+    </footer>
+
     <!-- 新建项目：先填标题和描述 -->
     <el-dialog
       v-model="showNewDialog"
@@ -305,6 +309,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, PictureFilled } from '@element-plus/icons-vue'
 import AppHeader from '@/components/ui/AppHeader.vue'
+import SiteIcpLink from '@/components/SiteIcpLink.vue'
 import { dramaAPI } from '@/api/drama'
 import { loadAllProjects } from '@/utils/projectList'
 import { characterLibraryAPI } from '@/api/characterLibrary'
@@ -2077,6 +2082,12 @@ html.light .project-card{background:rgba(255,255,255,.72)!important}
 .film-list>.main{height:auto;min-height:calc(100dvh - var(--ui-header-height));overflow:visible}
 .projects-wrap,.projects-wrap.showing-records{height:auto;min-height:0;overflow:visible}
 .media-stage{height:calc(100dvh - var(--ui-header-height));min-height:0}
+
+.site-footer {
+  padding: 16px 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
 
 /* Keep the records shortcut clear of the mobile hero title. */
 @media (max-width: 52rem) {
