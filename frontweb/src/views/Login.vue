@@ -179,6 +179,7 @@
     <footer class="page-footer">
       <span>© 2026 瑞池传媒</span>
       <span>从第一句灵感，到最后一个镜头。</span>
+      <SiteIcpLink />
     </footer>
   </main>
 </template>
@@ -201,6 +202,7 @@ import {
 import request from '@/utils/request'
 import { useTheme } from '@/composables/useTheme'
 import { safeRedirectPath } from '@/utils/routeRecovery'
+import SiteIcpLink from '@/components/SiteIcpLink.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -516,6 +518,8 @@ async function submit() {
 .trust-row svg { width: 13px; color: #ff806e; }
 
 .page-footer { position: absolute; inset-inline-start: clamp(24px, 6vw, 92px); inset-block-end: 27px; z-index: 6; display: flex; gap: 24px; color: rgba(255, 255, 255, .32); font-size: 10px; letter-spacing: .05em; }
+.page-footer { align-items: center; flex-wrap: wrap; gap: 8px 24px; max-width: calc(100% - max(460px, min(42vw, 600px)) - clamp(24px, 6vw, 92px) - 24px); }
+.page-footer :deep(.site-icp-link) { color: #d5d0cb; }
 
 .is-light { --panel: rgba(248, 243, 235, .9); }
 .is-light .cinema-image { filter: saturate(.78) brightness(1.08); }
@@ -561,7 +565,7 @@ async function submit() {
   .creation-track { max-width: 610px; }
   .access-panel { position: relative; inset: auto; width: calc(100% - 32px); min-width: 0; margin: 52px 16px 80px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 28px; box-shadow: 0 28px 90px rgba(0, 0, 0, .38); }
   .panel-content { width: min(84%, 480px); }
-  .page-footer { position: relative; inset: auto; margin: -45px 24px 25px; }
+  .page-footer { position: relative; inset: auto; max-width: none; margin: -45px 24px 25px; }
 }
 
 @media (max-width: 560px) {
