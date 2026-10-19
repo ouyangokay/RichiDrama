@@ -49,7 +49,7 @@ jobs:
             # GitHub over this server's own SSH connection, not an SCP push.
             if ! timeout 300s git -C "$repo" fetch origin main --no-tags; then
               echo 'fetch failed; switching origin to SSH port 22 and retrying once'
-              git -C "$repo" remote set-url origin git@github.com:Moemu/RichiDrama.git
+              git -C "$repo" remote set-url origin git@github.com:ouyangokay/RichiDrama.git
               timeout 300s git -C "$repo" fetch origin main --no-tags
             fi
             # Only the exact commit that Validation approved may be released;
