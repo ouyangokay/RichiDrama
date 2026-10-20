@@ -35,7 +35,6 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch != 'main')
     name: Deploy PR preview
     runs-on: ubuntu-latest
-    environment: preview
     timeout-minutes: 45
     steps:
       - name: Resolve and validate internal PR
