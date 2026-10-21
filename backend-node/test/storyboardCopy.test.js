@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { copyStoryboard } = require('../src/services/storyboardService');
 
 const log = { info() {}, warn() {}, error() {} };
@@ -101,4 +104,79 @@ test('copyStoryboard copies editable data after the source and excludes generate
 test('copyStoryboard returns null for a missing source', () => {
   const db = createDb();
   assert.equal(copyStoryboard(db, log, 404), null);
+});
+
+test('storyboard copy rolls back reordered shots when insertion fails', () => {
+  const db = createDb();
+  try {
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title) VALUES (1,1,'源'),(1,2,'后镜')").run();
+    db.exec(`CREATE TRIGGER fail_storyboard_copy BEFORE INSERT ON storyboards
+      WHEN NEW.title LIKE '%（副本）' BEGIN SELECT RAISE(ABORT, 'copy rejected'); END;`);
+    const before = db.prepare('SELECT id,storyboard_number,title FROM storyboards ORDER BY id').all();
+    assert.throws(() => copyStoryboard(db, log, 1), /copy rejected/);
+    assert.deepEqual(db.prepare('SELECT id,storyboard_number,title FROM storyboards ORDER BY id').all(), before);
+  } finally { db.close(); }
+});
+
+test('copy pins the adopted local video without copying generation ownership or history', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-playback-'));
+  const db = createDb();
+  try {
+    db.exec(`ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+      CREATE TABLE video_generations (id INTEGER PRIMARY KEY, status TEXT, local_path TEXT, poster_local_path TEXT, deleted_at TEXT);`);
+    fs.mkdirSync(path.join(root, 'videos'));
+    fs.writeFileSync(path.join(root, 'videos', 'adopted.mp4'), 'test video bytes');
+    db.prepare("INSERT INTO video_generations VALUES (41,'completed','videos/adopted.mp4','videos/poster.jpg',NULL)").run();
+    db.prepare("INSERT INTO video_generations VALUES (42,'completed','videos/missing.mp4',NULL,NULL)").run();
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title,active_video_generation_id,status) VALUES (1,1,'原镜头',41,'completed')").run();
+    const copy = copyStoryboard(db, log, 1, root);
+    const row = db.prepare('SELECT * FROM storyboards WHERE id=?').get(copy.id);
+    assert.equal(row.playback_video_generation_id, 41);
+    assert.equal(row.video_url, null);
+    assert.equal(row.local_path, null);
+    assert.equal(row.active_video_generation_id, null);
+    assert.equal(row.status, 'pending');
+    assert.equal(copy.video_url, '/static/videos/adopted.mp4');
+    assert.equal(copy.poster_local_path, 'videos/poster.jpg');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM video_generations').get().n, 2);
+    db.prepare('UPDATE storyboards SET active_video_generation_id=42 WHERE id=1').run();
+    db.prepare('UPDATE storyboards SET deleted_at=? WHERE id=1').run(new Date().toISOString());
+    assert.equal(require('../src/services/storyboardService').getStoryboardById(db, copy.id, root).video_url, copy.video_url);
+    const second = copyStoryboard(db, log, copy.id, root);
+    assert.equal(second.playback_video_generation_id, 41, 'copying a copy keeps the selected playback resource');
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('copy does not reference an incomplete, deleted or missing local source', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-invalid-'));
+  const db = createDb();
+  try {
+    db.exec(`ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+      CREATE TABLE video_generations (id INTEGER PRIMARY KEY, status TEXT, local_path TEXT, poster_local_path TEXT, deleted_at TEXT);`);
+    fs.mkdirSync(path.join(root, 'videos'));
+    fs.writeFileSync(path.join(root, 'videos', 'valid.mp4'), 'local fixture');
+    db.prepare("INSERT INTO video_generations VALUES (1,'processing','videos/valid.mp4',NULL,NULL),(2,'completed','videos/missing.mp4',NULL,NULL),(3,'completed','videos/valid.mp4',NULL,'2026-01-01')").run();
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title,active_video_generation_id) VALUES (1,1,'源',1)").run();
+    for (const id of [1, 2, 3, 404]) {
+      db.prepare('UPDATE storyboards SET active_video_generation_id=? WHERE id=1').run(id);
+      assert.equal(copyStoryboard(db, log, 1, root).playback_video_generation_id, null);
+    }
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('legacy current video can be resolved by its exact local path, never by latest history', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-legacy-'));
+  const db = createDb();
+  try {
+    db.exec(`ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+      CREATE TABLE video_generations (id INTEGER PRIMARY KEY, status TEXT, local_path TEXT, poster_local_path TEXT, deleted_at TEXT);`);
+    fs.mkdirSync(path.join(root, 'videos'));
+    fs.writeFileSync(path.join(root, 'videos', 'adopted.mp4'), 'local fixture');
+    fs.writeFileSync(path.join(root, 'videos', 'latest.mp4'), 'other fixture');
+    db.prepare("INSERT INTO video_generations VALUES (41,'completed','videos/adopted.mp4',NULL,NULL),(42,'completed','videos/latest.mp4',NULL,NULL)").run();
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title,local_path) VALUES (1,1,'旧镜头','videos/adopted.mp4')").run();
+    assert.equal(copyStoryboard(db, log, 1, root).playback_video_generation_id, 41);
+    db.prepare("UPDATE storyboards SET local_path='videos/missing.mp4' WHERE id=1").run();
+    assert.equal(copyStoryboard(db, log, 1, root).playback_video_generation_id, null);
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

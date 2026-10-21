@@ -406,7 +406,7 @@ const filteredProjectLibraryAssets = computed(() => {
   const keyword = projectLibraryKeyword.value.trim().toLowerCase()
   return visibleAssets.value.filter((asset) => !asset.archived_at && (!keyword || `${assetLegacyAliases(asset).join(' ')} ${asset.type || ''} ${typeName(asset.type)}`.toLowerCase().includes(keyword)))
 })
-const activeJob = computed(() => resolveShotPreviewJob(shotHistory.value, selectedHistoryJobId.value, currentShot.value?.omni_job_id))
+const activeJob = computed(() => resolveShotPreviewJob(shotHistory.value, selectedHistoryJobId.value, isProjectMode.value ? currentShot.value?.active_video_generation_id : currentShot.value?.omni_job_id, currentShot.value?.playback_video_generation_id, isProjectMode.value))
 const activeVideoUrl = computed(() => shotPreviewVideoUrl(activeJob.value, currentShot.value))
 const topMediaLayerId = computed(() => mediaLayers.value.at(-1)?.id || null)
 function discardMediaLayer(id) {
@@ -694,7 +694,7 @@ function projectShot(storyboard, video = null) {
     ...rest,
     editBaseline: { ...JSON.parse(JSON.stringify(storyboard)), __projectId: projectDramaId.value, __projectRevision: projectSnapshot('storyboards', storyboard.id)?.__projectRevision },
     video_url: videoUrl,
-    poster_local_path: video?.poster_local_path || null,
+    poster_local_path: video?.poster_local_path || storyboard.poster_local_path || null,
     status: videoUrl && ['pending', 'draft', '', null, undefined].includes(rawStatus) ? 'completed' : rawStatus,
     prompt: storyboard.universal_segment_text || storyboard.video_prompt || '',
     prompt_document: storyboard.omni_prompt_document || promptDocumentFor(storyboard.universal_segment_text || storyboard.video_prompt || '', assetIds),
@@ -754,7 +754,9 @@ async function loadProjectVideos(storyboards) {
       storyboard_id: storyboard.id,
       page_size: 20,
     })
-    return [Number(storyboard.id), result?.items?.find(video => pendingPreviewStatuses.has(video.status)) || bestPlayableVideo(result?.items)]
+    const videos = result?.items || []
+    const current = videos.find(video => Number(storyboard.active_video_generation_id) > 0 && Number(video.id) === Number(storyboard.active_video_generation_id) && video.status === 'completed' && !!localVideoUrl(video))
+    return [Number(storyboard.id), current || (storyboard.playback_video_generation_id ? null : videos.find(video => pendingPreviewStatuses.has(video.status)) || bestPlayableVideo(videos))]
   }))
   return new Map(groups)
 }
@@ -1073,7 +1075,8 @@ async function loadShotHistory(shot) {
     ])
     if (Number(currentShot.value?.id) !== shotId) return
     const jobs = (result || []).map(normalizeJob)
-    const playableVideo = bestPlayableVideo(videoResult?.items)
+    const currentVideo = (videoResult?.items || []).find(video => Number(shot.active_video_generation_id) > 0 && Number(video.id) === Number(shot.active_video_generation_id) && video.status === 'completed' && !!localVideoUrl(video))
+    const playableVideo = currentVideo || (shot.playback_video_generation_id ? null : bestPlayableVideo(videoResult?.items))
     if (playableVideo) {
       currentShot.value.video_url = localVideoUrl(playableVideo)
       currentShot.value.poster_local_path = playableVideo.poster_local_path || currentShot.value.poster_local_path || null
@@ -1084,8 +1087,9 @@ async function loadShotHistory(shot) {
     shotHistory.value = [...jobs, ...legacy].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     // Follow a restored task through completion or failure, without replacing
     // a version the user explicitly selected while history was loading.
-    if (selectedHistoryJobId.value == null) {
-      selectedHistoryJobId.value = shotHistory.value.find(job => pendingPreviewStatuses.has(job.status))?.id ?? null
+    if (selectedHistoryJobId.value == null && !shot.playback_video_generation_id) {
+      selectedHistoryJobId.value = shotHistory.value.some(job => job.is_current && job.status === 'completed' && job.videoUrl)
+        ? null : shotHistory.value.find(job => pendingPreviewStatuses.has(job.status))?.id ?? null
     }
     jobs.filter((job) => activeGenerationStatuses.has(job.status)).forEach((job) => poll(job.id))
   } catch (error) { if (Number(currentShot.value?.id) === shotId) ElMessage.warning(error?.message || '当前镜头的生成记录加载失败，请稍后刷新') }
@@ -1171,7 +1175,7 @@ async function saveCurrentShot(showMessage = true) {
 }
 let autoSaveErrorShown = false
 function scheduleSave() { if (loadingShot.value || applyingRemoteInputs || reproductionMode.value || !currentShot.value) return; clearTimeout(saveTimer); saveTimer = setTimeout(() => saveCurrentShot(false).then(() => { autoSaveErrorShown = false }).catch((error) => { if (!autoSaveErrorShown) { autoSaveErrorShown = true; ElMessage.error(error?.message || '自动保存失败，草稿仍保留在当前页面，请重试保存') } }), 650) }
-async function addShot(afterCurrent) {
+async function addShot(afterCurrent, copySourceId = null) {
   await saveCurrentShot(false)
   if (isProjectMode.value) {
     const index = afterCurrent ? activeShotIndex.value + 1 : shots.value.length
@@ -1189,7 +1193,7 @@ async function addShot(afterCurrent) {
     emit('changed')
     return
   }
-  const shot = await omniVideoAPI.addShot(sequence.value.id, afterCurrent ? { after_shot_id: activeShotId.value } : {})
+  const shot = await omniVideoAPI.addShot(sequence.value.id, { ...(afterCurrent ? { after_shot_id: activeShotId.value } : {}), ...(copySourceId ? { copy_source_shot_id: copySourceId } : {}) })
   const refreshed = await omniVideoAPI.getSequence(sequence.value.id)
   sequence.value = refreshed
   shots.value = refreshed.shots
@@ -1208,12 +1212,13 @@ async function copyCurrentShot() {
     }
     const draft = {
       prompt: prompt.value,
-      promptDocument: structuredClone(promptDocument.value || { text: prompt.value, refs: [] }),
+      // 与 API/草稿的 JSON 文档格式一致，同时深拷贝 refs 等嵌套响应式代理。
+      promptDocument: JSON.parse(JSON.stringify(promptDocument.value || { text: prompt.value, refs: [] })),
       settings: { model: model.value, creationMode: creationMode.value, aspectRatio: aspectRatio.value, duration: duration.value, resolution: resolution.value, upscaleResolution: upscaleResolution.value, targetFps: targetFps.value, audioStrategy: audioStrategy.value, keepOriginalAudio: keepOriginalAudio.value, audioVolume: audioVolume.value, audioFadeSeconds: audioFadeSeconds.value },
       selectedOrder: [...selectedOrder.value],
       assets: chosenAssets.value.map((asset) => ({ id: asset.id, usage: asset.usage })),
     }
-    await addShot(true)
+    await addShot(true, currentShot.value.id)
     prompt.value = draft.prompt
     promptDocument.value = draft.promptDocument
     model.value = draft.settings.model
@@ -1233,7 +1238,6 @@ async function copyCurrentShot() {
       const asset = assets.value.find((item) => item.id === saved.id)
       if (asset) asset.usage = saved.usage || asset.usage
     }
-    await saveCurrentShot(false)
     ElMessage.success('已复制为当前镜头后的新镜头')
   } catch (error) {
     ElMessage.error(error.message || '复制镜头失败')

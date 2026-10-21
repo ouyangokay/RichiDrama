@@ -33,19 +33,25 @@ function ensureDefault(db, ownerUserId) {
   return get(db, sequence.id);
 }
 
-function shotRow(row) {
+function shotRow(row, db, storageRoot = null) {
+  const ownVideo = row.generation_local_path ? `/static/${row.generation_local_path}` : row.generation_video_url || null;
+  const playback = !ownVideo && row.playback_video_generation_id
+    ? require('./videoService').playbackGeneration(db, row.playback_video_generation_id, storageRoot) : null;
   return { ...row, assets: parse(row.assets_json, []), prompt_document: parse(row.prompt_document_json, null), settings: normalizedShotSettings(parse(row.settings_json, {})),
     status: row.generation_status || (row.omni_job_id ? 'processing' : 'draft'),
-    video_url: row.generation_local_path ? `/static/${row.generation_local_path}` : row.generation_video_url || null };
+    video_url: ownVideo || playback?.video_url || null,
+    poster_local_path: row.generation_poster_local_path || playback?.poster_local_path || null };
 }
 
-function listShots(db, sequenceId) {
+function listShots(db, sequenceId, storageRoot = null) {
+  const hasPoster = db.prepare("SELECT 1 FROM pragma_table_info('video_generations') WHERE name='poster_local_path'").get() != null;
+  const hasDeleted = db.prepare("SELECT 1 FROM pragma_table_info('video_generations') WHERE name='deleted_at'").get() != null;
   return db.prepare(`SELECT s.*, v.status generation_status, v.video_url generation_video_url,
-      v.local_path generation_local_path, v.error_msg generation_error
+      v.local_path generation_local_path, ${hasPoster ? 'v.poster_local_path' : 'NULL'} generation_poster_local_path, v.error_msg generation_error
     FROM omni_video_sequence_shots s
     LEFT JOIN omni_video_jobs j ON j.id = s.omni_job_id
-    LEFT JOIN video_generations v ON v.id = j.video_generation_id
-    WHERE s.sequence_id = ? AND s.deleted_at IS NULL ORDER BY s.sort_order, s.id`).all(Number(sequenceId)).map(shotRow);
+    LEFT JOIN video_generations v ON v.id = j.video_generation_id${hasDeleted ? ' AND v.deleted_at IS NULL' : ''}
+    WHERE s.sequence_id = ? AND s.deleted_at IS NULL ORDER BY s.sort_order, s.id`).all(Number(sequenceId)).map((row) => shotRow(row, db, storageRoot));
 }
 
 function get(db, id) {
@@ -96,7 +102,24 @@ function updateSequence(db, id, body) {
   return get(db, sequence.id);
 }
 
-function createShot(db, sequenceId, body) {
+function createShot(db, sequenceId, body, storageRoot = null) {
+  if (body?.copy_source_shot_id) return db.transaction(() => {
+    const source = db.prepare(`SELECT s.* FROM omni_video_sequence_shots s JOIN omni_video_sequences q ON q.id=s.sequence_id
+      WHERE s.id=? AND s.sequence_id=? AND s.deleted_at IS NULL AND q.deleted_at IS NULL`).get(Number(body.copy_source_shot_id), Number(sequenceId));
+    if (!source || (body.after_shot_id && Number(body.after_shot_id) !== Number(source.id))) throw new Error('复制来源镜头不存在');
+    const bound = source.omni_job_id && db.prepare(`SELECT v.id FROM omni_video_jobs j JOIN video_generations v ON v.id=j.video_generation_id
+      WHERE j.id=? AND j.sequence_id=? AND j.shot_id=? AND v.deleted_at IS NULL`).get(source.omni_job_id, Number(sequenceId), source.id);
+    const videoService = require('./videoService');
+    const playback = videoService.playbackGeneration(db, bound?.id, storageRoot)
+      || videoService.playbackGeneration(db, source.playback_video_generation_id, storageRoot);
+    const stamp = now();
+    const out = db.prepare(`INSERT INTO omni_video_sequence_shots
+      (sequence_id, title, sort_order, prompt, prompt_document_json, assets_json, settings_json, playback_video_generation_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(Number(sequenceId), body.title || '未命名镜头', Number(source.sort_order) + 5,
+      source.prompt || '', source.prompt_document_json, source.assets_json, source.settings_json, playback?.id || null, stamp, stamp);
+    normalizeOrder(db, sequenceId);
+    return listShots(db, sequenceId, storageRoot).find((shot) => shot.id === Number(out.lastInsertRowid));
+  }).immediate();
   const sequence = db.prepare('SELECT id FROM omni_video_sequences WHERE id = ? AND deleted_at IS NULL').get(Number(sequenceId));
   if (!sequence) throw new Error('创作序列不存在');
   const current = listShots(db, sequenceId);
@@ -169,8 +192,14 @@ function restoreSequence(db, id) {
   const stamp = now();
   const tx = db.transaction(() => {
     db.prepare('UPDATE omni_video_sequences SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(stamp, sequence.id);
+    if (db.prepare("SELECT 1 FROM pragma_table_info('omni_video_sequence_shots') WHERE name='playback_video_generation_id'").get()) {
+      db.prepare(`UPDATE omni_video_sequence_shots SET playback_video_generation_id=NULL
+        WHERE sequence_id=? AND playback_video_generation_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM video_generations v WHERE v.id=omni_video_sequence_shots.playback_video_generation_id AND v.deleted_at IS NULL)`)
+        .run(sequence.id);
+    }
     db.prepare('UPDATE omni_video_sequence_shots SET deleted_at = NULL, updated_at = ? WHERE sequence_id = ?').run(stamp, sequence.id);
-  }); tx();
+  }); tx.immediate();
   return get(db, sequence.id);
 }
 

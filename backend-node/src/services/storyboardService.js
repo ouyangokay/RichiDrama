@@ -265,9 +265,11 @@ function deleteStoryboard(db, log, id) {
   return true;
 }
 
-function getStoryboardById(db, id) {
+function getStoryboardById(db, id, storageRoot = null) {
   const r = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(id));
   if (!r) return null;
+  const playback = r.playback_video_generation_id
+    ? require('./videoService').playbackGeneration(db, r.playback_video_generation_id, storageRoot) : null;
   const characters = parseStoryboardCharacters(r.characters);
   let propIds = [];
   try {
@@ -323,8 +325,10 @@ function getStoryboardById(db, id) {
     main_panel_idx: r.main_panel_idx != null ? Number(r.main_panel_idx) : null,
     video_url: (r.local_path && /\.(?:mp4|webm|mov|m4v|avi|mkv)(?:[?#].*)?$/i.test(String(r.local_path).trim()))
       ? `/static/${String(r.local_path).trim().replace(/^\/+/, '')}`
-      : (r.video_url || null),
+      : (r.video_url || playback?.video_url || null),
     active_video_generation_id: r.active_video_generation_id ?? null,
+    playback_video_generation_id: r.playback_video_generation_id ?? null,
+    poster_local_path: r.video_url ? null : (playback?.poster_local_path || null),
     audio_local_path: r.audio_local_path ?? null,
     narration_audio_local_path: r.narration_audio_local_path ?? null,
     status: r.status || 'pending',
@@ -408,10 +412,7 @@ function insertBeforeStoryboard(db, log, targetId) {
  * Copy editable content, generation settings, and asset references. Do not copy
  * generated media, adopted video state, audio files, or task status.
  */
-function copyStoryboard(db, log, sourceId) {
-  const source = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(sourceId));
-  if (!source) return null;
-
+function copyStoryboard(db, log, sourceId, storageRoot = null) {
   const availableColumns = new Set(db.prepare('PRAGMA table_info(storyboards)').all().map((column) => column.name));
   const copyColumns = [
     'episode_id', 'scene_id', 'title', 'description', 'layout_description',
@@ -428,7 +429,21 @@ function copyStoryboard(db, log, sourceId) {
   ].filter((column) => availableColumns.has(column));
 
   const now = new Date().toISOString();
-  const copiedId = db.transaction(() => {
+  const copied = db.transaction(() => {
+    const source = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(sourceId));
+    if (!source) return null;
+    const videoService = require('./videoService');
+    let adopted = videoService.playbackGeneration(db, source.active_video_generation_id, storageRoot);
+    // Legacy current adoption may be recorded only by its exact local file.
+    // Do not infer it from the newest history entry or an ambiguous path.
+    if (!adopted && !source.active_video_generation_id && source.local_path) {
+      try {
+        const matches = db.prepare(`SELECT id FROM video_generations
+          WHERE local_path=? AND deleted_at IS NULL AND status='completed' LIMIT 2`).all(source.local_path);
+        if (matches.length === 1) adopted = videoService.playbackGeneration(db, matches[0].id, storageRoot);
+      } catch (error) { if (!/no such (?:table|column)/i.test(error.message)) throw error; }
+    }
+    adopted ||= videoService.playbackGeneration(db, source.playback_video_generation_id, storageRoot);
     db.prepare(
       'UPDATE storyboards SET storyboard_number = storyboard_number + 1, updated_at = ? WHERE episode_id = ? AND storyboard_number > ? AND deleted_at IS NULL'
     ).run(now, source.episode_id, source.storyboard_number);
@@ -443,6 +458,10 @@ function copyStoryboard(db, log, sourceId) {
       now,
       now,
     ];
+    if (availableColumns.has('playback_video_generation_id')) {
+      insertColumns.push('playback_video_generation_id');
+      values.push(adopted?.id || null);
+    }
     const placeholders = insertColumns.map(() => '?').join(', ');
     const info = db.prepare(
       `INSERT INTO storyboards (${insertColumns.join(', ')}) VALUES (${placeholders})`
@@ -485,11 +504,13 @@ function copyStoryboard(db, log, sourceId) {
       ));
     } catch (_) {}
 
-    return newId;
-  })();
+    return getStoryboardById(db, newId, storageRoot);
+  }).immediate();
 
-  log.info('Storyboard copied', { source_id: source.id, copied_id: copiedId, episode_id: source.episode_id });
-  return getStoryboardById(db, copiedId);
+  if (!copied) return null;
+
+  log.info('Storyboard copied', { source_id: Number(sourceId), copied_id: copied.id });
+  return copied;
 }
 
 module.exports = {

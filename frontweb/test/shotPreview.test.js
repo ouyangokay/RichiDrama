@@ -63,3 +63,22 @@ test('polling keeps the selected Omni job identity when the video generation ID 
   assert.equal(resolveShotPreviewJob([finished, adopted], pending.id, shot.omni_job_id), finished)
   assert.match(shotPreviewVideoUrl(finished, shot), /^\/static\/new\.mp4/)
 })
+
+test('copied playback is a fallback for failed and cancelled own tasks, and own completion wins', () => {
+  const copy = { playback_video_generation_id: 41, video_url: '/static/original.mp4', omni_job_id: 9, status: 'failed' }
+  const old = { id: 7, status: 'completed', videoUrl: '/static/unrelated.mp4' }
+  assert.equal(resolveShotPreviewJob([old], null, copy.omni_job_id, copy.playback_video_generation_id), null)
+  for (const status of ['processing', 'failed', 'cancelled']) {
+    const own = { id: 9, status, videoUrl: '' }
+    assert.equal(shotPreviewVideoUrl(resolveShotPreviewJob([old, own], null, 9, 41), copy), copy.video_url)
+  }
+  const finished = { id: 9, status: 'completed', videoUrl: '/static/new.mp4' }
+  assert.equal(shotPreviewVideoUrl(resolveShotPreviewJob([old, finished], null, 9, 41), copy), finished.videoUrl)
+})
+
+test('project current adoption wins over newer historical videos while explicit preview still works', () => {
+  const current = { id: 4, video_generation_id: 41, is_current: true, status: 'completed', videoUrl: '/static/adopted.mp4' }
+  const latest = { id: 5, video_generation_id: 42, status: 'completed', videoUrl: '/static/latest.mp4' }
+  assert.equal(resolveShotPreviewJob([latest, current], null, 41, null, true), current)
+  assert.equal(resolveShotPreviewJob([latest, current], 5, 41, null, true), latest)
+})

@@ -1,0 +1,2 @@
+ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+ALTER TABLE omni_video_sequence_shots ADD COLUMN playback_video_generation_id INTEGER;
