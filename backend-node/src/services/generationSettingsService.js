@@ -12,13 +12,19 @@ function parseObject(value) {
   } catch (_) { return {}; }
 }
 
-function normalize(input, partial = false) {
+function maxDurationForModel(model) {
+  return /seedance[-_]?2[-_]?5|2[-_]?5[-_]?260628/i.test(String(model || '')) ? 30 : 15;
+}
+
+function normalize(input, partial = false, modelForDuration = null) {
   const source = parseObject(input);
   const out = {};
+  const durationModel = modelForDuration || (source.video_model === undefined ? DEFAULTS.video_model : source.video_model);
+  const durationLimit = maxDurationForModel(durationModel);
   for (const key of KEYS) {
     if (partial && source[key] === undefined) continue;
     const value = source[key] === undefined ? DEFAULTS[key] : source[key];
-    if (key === 'duration') out[key] = Math.min(15, Math.max(1, Number(value) || DEFAULTS.duration));
+    if (key === 'duration') out[key] = Math.min(durationLimit, Math.max(1, Number(value) || DEFAULTS.duration));
     else if (key === 'upscale_resolution') out[key] = value == null || value === '' ? null : String(value).trim().toLowerCase();
     else if (key === 'target_fps') out[key] = value == null || value === '' ? null : Number(value);
     else out[key] = String(value == null || value === '' ? DEFAULTS[key] : value).trim();
@@ -40,7 +46,8 @@ function episodeDefaults(db, episodeId) {
 }
 
 function effective(defaults, overrides) {
-  return validateEffective(normalize({ ...DEFAULTS, ...normalize(defaults), ...normalize(overrides, true) }));
+  const normalizedDefaults = normalize(defaults);
+  return validateEffective(normalize({ ...DEFAULTS, ...normalizedDefaults, ...normalize(overrides, true, normalizedDefaults.video_model) }));
 }
 
 function materializedPatch(settings) {
@@ -129,7 +136,7 @@ function getEpisodeSettings(db, episodeId) {
     episode_id: Number(episodeId), defaults,
     master_storyboard_id: rows[0]?.id || null,
     storyboards: rows.map((row, index) => {
-      const overrides = index === 0 ? {} : normalize(row.generation_overrides_json, true);
+      const overrides = index === 0 ? {} : normalize(row.generation_overrides_json, true, defaults.video_model);
       return { id: row.id, mode: index === 0 ? 'master' : (Object.keys(overrides).length ? 'custom' : 'inherited'), overrides, effective: effective(defaults, overrides) };
     }),
   };
@@ -164,8 +171,8 @@ function setStoryboardSettings(db, storyboardId, input, scope = 'current') {
   if (!defaults) return null;
   const master = firstStoryboard(db, row.episode_id);
   if (scope === 'episode_default' || Number(master?.id) === Number(row.id)) return setEpisodeDefaults(db, row.episode_id, input, 'preserve');
-  const supplied = normalize(input, true);
-  const overrides = { ...normalize(row.generation_overrides_json, true), ...supplied };
+  const supplied = normalize(input, true, defaults.video_model);
+  const overrides = { ...normalize(row.generation_overrides_json, true, defaults.video_model), ...supplied };
   const at = new Date().toISOString();
   db.transaction(() => {
     db.prepare('UPDATE storyboards SET generation_overrides_json=? WHERE id=?').run(JSON.stringify(overrides), Number(storyboardId));

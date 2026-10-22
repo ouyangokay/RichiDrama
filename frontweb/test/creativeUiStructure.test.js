@@ -545,6 +545,18 @@ test('generation settings use model capabilities to filter source resolutions', 
   assert.doesNotMatch(config, /duration_seconds/)
 })
 
+test('generation settings use the selected model duration capability without broadening the fallback', async () => {
+  const [source, tool, filmCreate] = await Promise.all([
+    readSource('../src/components/GenerationSettings.vue'),
+    readSource('../src/views/ToolMediaGeneration.vue'),
+    readSource('../src/views/FilmCreate.vue'),
+  ])
+  assert.match(source, /limits\?\.duration\?\.max/)
+  assert.match(source, /modelMaxDuration/)
+  assert.match(tool, /<GenerationSettings[\s\S]*:max-duration="15"/)
+  assert.match(filmCreate, /<GenerationSettings[\s\S]*:max-duration="15"/)
+})
+
 test('generation settings hide aspect ratios that the selected model cannot use', async () => {
   const source = await readSource('../src/components/GenerationSettings.vue')
   assert.match(source, /limits\?\.aspect_ratios/)

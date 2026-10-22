@@ -8,6 +8,25 @@ const generationSettings = require('../src/services/generationSettingsService');
 
 const log = { info() {}, warn() {}, error() {} };
 
+test('only Seedance 2.5 generation settings allow durations above 15 seconds', () => {
+  assert.equal(generationSettings.normalize({ video_model: 'doubao-seedance-2-5-260628', duration: 30 }).duration, 30);
+  assert.equal(generationSettings.normalize({ video_model: 'doubao-seedance-2-5-260628', duration: 31 }).duration, 30);
+  assert.equal(generationSettings.normalize({ video_model: 'doubao-seedance-2-0-mini-260615', duration: 30 }).duration, 15);
+  assert.equal(generationSettings.normalize({ video_model: 'auto', duration: 30 }).duration, 15);
+});
+
+test('Seedance 2.5 duration survives a storyboard-only override', () => {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE episodes (id INTEGER PRIMARY KEY, generation_defaults_json TEXT, updated_at TEXT, deleted_at TEXT);
+    CREATE TABLE storyboards (id INTEGER PRIMARY KEY, episode_id INTEGER, storyboard_number INTEGER, sort_order INTEGER DEFAULT 0, duration REAL, text_model TEXT, video_model TEXT, video_resolution TEXT, video_aspect_ratio TEXT, video_upscale_resolution TEXT, video_target_fps INTEGER, generation_overrides_json TEXT, updated_at TEXT, deleted_at TEXT);`);
+  db.prepare('INSERT INTO episodes (id) VALUES (1)').run();
+  db.prepare('INSERT INTO storyboards (id, episode_id, storyboard_number) VALUES (1,1,1),(2,1,2)').run();
+  generationSettings.setEpisodeDefaults(db, 1, { video_model: 'doubao-seedance-2-5-260628', duration: 30 }, 'replace');
+  const updated = generationSettings.setStoryboardSettings(db, 2, { duration: 30 });
+  assert.equal(updated.effective.duration, 30);
+  assert.equal(db.prepare('SELECT duration FROM storyboards WHERE id=2').get().duration, 30);
+});
+
 test('free-create shot stores independent model, duration and resolution', () => {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE omni_video_sequences (id INTEGER PRIMARY KEY, name TEXT, is_default INTEGER, deleted_at TEXT, created_at TEXT, updated_at TEXT);

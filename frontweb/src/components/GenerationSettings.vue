@@ -41,12 +41,18 @@ const textModels = ref([]), videoModels = ref([]), modelNames = ref({})
 let modelOptionsCache = null
 let modelOptionsPromise = null
 const value = computed(() => props.modelValue || {})
-const duration = computed(() => Math.min(props.maxDuration, Math.max(4, Number(value.value.duration) || 15)))
-const durationOptions = computed(() => Array.from({ length: Math.max(0, props.maxDuration - 3) }, (_, index) => index + 4))
 const textModelOptions = computed(() => [{ label: '自动选择', description: '使用当前默认文本模型', value: 'auto' }, ...textModels.value.map((item) => ({ label: displayModelName(item), value: item }))])
 const videoModelOptions = computed(() => videoModels.value.map((item) => ({ label: displayModelName(item.model), description: item.is_default ? '默认模型' : '', value: item.model })))
 const allResolutionOptions = [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }]
-const selectedVideoCapability = computed(() => videoModels.value.find((item) => item.model === value.value.video_model) || null)
+function modelKey(model) { return String(model || '').trim().toLowerCase() }
+function isSeedance25Model(model) { return /seedance[-_]?2[-_]?5|2[-_]?5[-_]?260628/i.test(modelKey(model)) }
+const selectedVideoCapability = computed(() => videoModels.value.find((item) => modelKey(item.model) === modelKey(value.value.video_model)) || null)
+const modelMaxDuration = computed(() => {
+  const configured = Number(selectedVideoCapability.value?.limits?.duration?.max)
+  return Number.isFinite(configured) && configured > 0 ? configured : isSeedance25Model(value.value.video_model) ? 30 : props.maxDuration
+})
+const duration = computed(() => Math.min(modelMaxDuration.value, Math.max(4, Number(value.value.duration) || 15)))
+const durationOptions = computed(() => Array.from({ length: Math.max(0, modelMaxDuration.value - 3) }, (_, index) => index + 4))
 const allowedResolutions = computed(() => {
   const configured = selectedVideoCapability.value?.limits?.resolutions
   return Array.isArray(configured) && configured.length
@@ -83,9 +89,12 @@ function displayModelName(model) {
   return modelLabel(modelNames.value, model)
 }
 function set(key, next) {
-  const nextValue = { ...value.value, [key]: key === 'duration' ? Math.min(props.maxDuration, Math.max(4, Number(next) || 15)) : next }
+  const nextValue = { ...value.value, [key]: key === 'duration' ? Math.min(modelMaxDuration.value, Math.max(4, Number(next) || 15)) : next }
   if (key === 'video_model') {
-    const capability = videoModels.value.find((item) => item.model === next)
+    const capability = videoModels.value.find((item) => modelKey(item.model) === modelKey(next))
+    const nextMaxDuration = Number(capability?.limits?.duration?.max)
+    const durationLimit = Number.isFinite(nextMaxDuration) && nextMaxDuration > 0 ? nextMaxDuration : isSeedance25Model(next) ? 30 : props.maxDuration
+    nextValue.duration = Math.min(durationLimit, Math.max(4, Number(nextValue.duration) || 15))
     const configured = capability?.limits?.resolutions
     const allowed = Array.isArray(configured) && configured.length ? configured.map((item) => String(item).toLowerCase()) : allResolutionOptions.map((item) => item.value)
     const current = String(nextValue.resolution || '720p').toLowerCase()
