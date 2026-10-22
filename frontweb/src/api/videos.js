@@ -2,6 +2,9 @@ import request from '@/utils/request'
 import { createClientRequestId } from '@/utils/requestId'
 
 export const videosAPI = {
+  get(id) {
+    return request.get(`/videos/${id}`)
+  },
   list(params) {
     return request.get('/videos', { params: params || {} })
   },

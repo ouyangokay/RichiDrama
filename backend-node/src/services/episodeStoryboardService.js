@@ -229,7 +229,7 @@ function buildFallbackUniversalSeedanceLine(sb, d, styleHint) {
   return line.replace(/\r?\n/g, ' ');
 }
 
-function getStoryboardsForEpisode(db, episodeId) {
+function getStoryboardsForEpisode(db, episodeId, storageRoot = null) {
   const hasIdentity = require('./storyboardIdentityService').supportsIdentity(db);
   const rows = dedupeStoryboardRowsByNumber(
     db.prepare(
@@ -237,6 +237,8 @@ function getStoryboardsForEpisode(db, episodeId) {
     ).all(episodeId)
   );
   return rows.map((r) => {
+    const playback = r.playback_video_generation_id
+      ? require('./videoService').playbackGeneration(db, r.playback_video_generation_id, storageRoot) : null;
     let background = null;
     if (r.scene_id != null) {
       const sceneRow = db.prepare('SELECT * FROM scenes WHERE id = ? AND deleted_at IS NULL').get(r.scene_id);
@@ -279,8 +281,10 @@ function getStoryboardsForEpisode(db, episodeId) {
         try { return JSON.parse(r.characters); } catch (_) { return []; }
       })(),
       composed_image: r.composed_image,
-      video_url: r.video_url,
+      video_url: r.video_url || playback?.video_url || null,
       active_video_generation_id: r.active_video_generation_id ?? null,
+      playback_video_generation_id: r.playback_video_generation_id ?? null,
+      poster_local_path: r.video_url ? null : (playback?.poster_local_path || null),
       audio_local_path: r.audio_local_path ?? null,
       narration_audio_local_path: r.narration_audio_local_path ?? null,
       status: r.status || 'pending',

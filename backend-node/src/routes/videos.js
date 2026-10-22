@@ -217,6 +217,7 @@ function routes(db, log) {
         if (!ok) return response.notFound(res, '记录不存在');
         response.success(res, { message: '删除成功' });
       } catch (err) {
+        if (err.code === 'VIDEO_IN_USE') return response.error(res, 409, 'VIDEO_IN_USE', err.message);
         log.error('videos delete', { error: err.message });
         response.internalError(res, err.message);
       }

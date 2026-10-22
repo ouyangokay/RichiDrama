@@ -16,9 +16,11 @@ const canvasEpisodeGenerate = readFileSync(new URL('../src/composables/useCanvas
 const canvasWorkflowRunner = readFileSync(new URL('../src/composables/useCanvasWorkflowRunner.js', import.meta.url), 'utf8')
 
 test('storyboard navigation uses real video, including retained source after post-processing failure', () => {
-  assert.match(freeCreate, /<video v-if="shot\.video_url"/)
+  assert.match(freeCreate, /<video v-if="shotPreviewUrl\(shot\)"/)
+  assert.match(freeCreate, /function shotGenerationInProgress\(shot\) \{ return activeGenerationStatuses\.has\(shot\?\.status\) \}/)
   assert.match(freeCreate, /v-else class="shot-video-placeholder"/)
-  assert.match(freeCreate, /class="shot-play">▶/)
+  assert.match(freeCreate, /class="shot-play"/)
+  assert.match(freeCreate, /shotGenerationInProgress\(shot\) \? '[^']+' : '▶'/)
   assert.match(freeCreate, /mergeSavedShot\(shots\.value, savingShotId, projectShot\(updated\), \{ preserveMedia: true \}\)/)
   assert.match(freeCreate, /source_local_path/)
   assert.match(freeCreate, /function bestPlayableVideo/)

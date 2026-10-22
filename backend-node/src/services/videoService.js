@@ -236,6 +236,24 @@ function getById(db, id) {
   return r ? rowToItem(withTaskProgress(db, r)) : null;
 }
 
+// A copy may reuse only a completed, locally readable final artifact. Never
+// expose a signed provider URL or a generation that has been soft-deleted.
+function playbackGeneration(db, id, storageRoot = null) {
+  if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) return null;
+  let row;
+  try { row = db.prepare(`SELECT id, status, local_path, poster_local_path FROM video_generations
+    WHERE id=? AND deleted_at IS NULL AND status='completed' AND local_path IS NOT NULL`).get(Number(id)); }
+  catch (error) { if (/no such (?:table|column)/i.test(error.message)) return null; throw error; }
+  if (!row?.local_path || !publicVideoUrl(null, row.local_path)) return null;
+  try {
+    const { normalizeStorageKey, resolveStorageFile } = require('../utils/storagePath');
+    if (normalizeStorageKey(row.local_path) !== row.local_path) return null;
+    resolveStorageFile(storageRoot || resolveStoragePath(require('../config').loadConfig()), row.local_path);
+  }
+  catch (_) { return null; }
+  return { id: row.id, local_path: row.local_path, video_url: publicVideoUrl(null, row.local_path), poster_local_path: row.poster_local_path || null };
+}
+
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -1536,9 +1554,15 @@ async function resumeResolvedPostprocessVideoGeneration(db, log, videoGenId) {
 }
 
 function deleteById(db, log, id) {
-  const now = new Date().toISOString();
-  const result = db.prepare('UPDATE video_generations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(now, Number(id));
-  return result.changes > 0;
+  return db.transaction(() => {
+    const referenced = db.prepare(`SELECT 1 FROM storyboards
+      WHERE playback_video_generation_id=? AND deleted_at IS NULL LIMIT 1`).get(Number(id))
+      || db.prepare(`SELECT 1 FROM omni_video_sequence_shots s JOIN omni_video_sequences q ON q.id=s.sequence_id
+        WHERE s.playback_video_generation_id=? AND s.deleted_at IS NULL AND q.deleted_at IS NULL LIMIT 1`).get(Number(id));
+    if (referenced) throw Object.assign(new Error('该成片仍被有效镜头引用，无法删除'), { code: 'VIDEO_IN_USE' });
+    const result = db.prepare('UPDATE video_generations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(new Date().toISOString(), Number(id));
+    return result.changes > 0;
+  }).immediate();
 }
 
 module.exports = {
@@ -1547,6 +1571,7 @@ module.exports = {
   list,
   listHomepageDefaultVideos,
   getById,
+  playbackGeneration,
   deleteById,
   processVideoGeneration,
   archiveCompletedVideo,

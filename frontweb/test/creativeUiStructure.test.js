@@ -258,6 +258,17 @@ test('分镜素材区默认只展示本镜工作集，项目素材通过检索�
   assert.match(libraryDialog, /project-asset-library-grid/)
 })
 
+test('视频素材缩略图失败时回退到视频首帧或占位图', async () => {
+  const source = await readSource('../src/views/FreeCreate.vue')
+
+  assert.match(source, /assetThumbnailFailed\(asset\)/)
+  assert.match(source, /markAssetThumbnailFailed\(asset\)/)
+  assert.match(source, /class="material-video-preview"/)
+  assert.match(source, /assetVideoPreviewFailed\(asset\)/)
+  assert.match(source, /markAssetVideoPreviewFailed\(asset\)/)
+  assert.match(source, /class="material-video-placeholder"/)
+})
+
 test('提示词引用只改变勾选态，不清空已加入本镜的素材', async () => {
   const source = await readSource('../src/views/FreeCreate.vue')
 
@@ -532,6 +543,18 @@ test('generation settings use model capabilities to filter source resolutions', 
   assert.match(source, /需要 1080p 成片时可启用 AI 超分/)
   assert.match(config, /"models":\{"模型 ID"/)
   assert.doesNotMatch(config, /duration_seconds/)
+})
+
+test('generation settings use the selected model duration capability without broadening the fallback', async () => {
+  const [source, tool, filmCreate] = await Promise.all([
+    readSource('../src/components/GenerationSettings.vue'),
+    readSource('../src/views/ToolMediaGeneration.vue'),
+    readSource('../src/views/FilmCreate.vue'),
+  ])
+  assert.match(source, /limits\?\.duration\?\.max/)
+  assert.match(source, /modelMaxDuration/)
+  assert.match(tool, /<GenerationSettings[\s\S]*:max-duration="15"/)
+  assert.match(filmCreate, /<GenerationSettings[\s\S]*:max-duration="15"/)
 })
 
 test('generation settings hide aspect ratios that the selected model cannot use', async () => {

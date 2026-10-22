@@ -1391,7 +1391,8 @@ const projectGenerationSettings = computed(() => ({
 }))
 function setProjectGenerationSettings(next = {}) {
   projectVideoModel.value = next.video_model || 'auto'
-  if (next.duration != null) videoClipDuration.value = Math.min(15, Math.max(1, Number(next.duration) || 15))
+  const durationLimit = /seedance[-_]?2[-_]?5|2[-_]?5[-_]?260628/i.test(projectVideoModel.value) ? 30 : 15
+  if (next.duration != null) videoClipDuration.value = Math.min(durationLimit, Math.max(1, Number(next.duration) || 15))
   if (next.resolution) videoResolution.value = next.resolution
   if (next.aspect_ratio) projectAspectRatio.value = next.aspect_ratio
   projectUpscaleResolution.value = next.upscale_resolution || null

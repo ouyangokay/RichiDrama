@@ -30,19 +30,34 @@ export function normalizeJob(data) {
   }
 }
 
-export function resolveShotPreviewJob(history, selectedId, boundId) {
-  return history.find(job => String(job.id) === String(selectedId))
+export function resolveShotPreviewJob(history, selectedId, boundId, playbackId = null, projectMode = false) {
+  if (!playbackId && !projectMode) return history.find(job => String(job.id) === String(selectedId))
     || history.find(job => pendingPreviewStatuses.has(job.status))
     || history.find(job => job.is_current)
     || history.find(job => String(job.id) === String(boundId))
     || history[0] || null
+  return history.find(job => String(job.id) === String(selectedId))
+    || (projectMode ? history.find(job => job.is_current && job.status === 'completed' && job.videoUrl && (!boundId || Number(job.video_generation_id) === Number(boundId))) : null)
+    || (projectMode && boundId ? history.find(job => Number(job.video_generation_id) === Number(boundId)) : null)
+    // In standalone Omni mode the shot is bound to the Omni job ID, not the
+    // video-generation ID.  Resolve that own task before falling back to the
+    // copied playback reference, including while the new task is processing.
+    || (!projectMode && boundId ? history.find(job => String(job.id) === String(boundId)) : null)
+    || (playbackId ? history.find(job => Number(job.video_generation_id) === Number(playbackId) && job.status === 'completed' && job.videoUrl) : null)
+    || (playbackId ? null : history.find(job => pendingPreviewStatuses.has(job.status)))
+    || (playbackId ? null : history.find(job => job.is_current))
+    || (playbackId ? null : history[0]) || null
 }
 
 export function shotPreviewVideoUrl(job, shot) {
   // 认证/生成中还没有任何本地视频；进入后处理（超分/插帧/保存）后基础原片
   // 已归档（localVideoUrl 会回退到 source/upscale_local_path），可直接预览，
   // 不必等后处理完成才看到画面。
+  const backup = shot?.playback_video_generation_id ? shot.video_url || '' : ''
+  // A new generation supersedes the copied preview immediately.  Do not
+  // continue showing the old video while the replacement task is waiting or
+  // processing; the stage status should be the only visible state.
   if (job && ['sd2_waiting', 'processing'].includes(job.status)) return ''
-  if (!job && activeGenerationStatuses.has(shot?.status)) return ''
-  return job ? job.videoUrl || '' : shot?.video_url || ''
+  if (!job && activeGenerationStatuses.has(shot?.status)) return backup
+  return job ? job.videoUrl || backup : shot?.video_url || ''
 }
