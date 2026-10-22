@@ -64,16 +64,31 @@ test('polling keeps the selected Omni job identity when the video generation ID 
   assert.match(shotPreviewVideoUrl(finished, shot), /^\/static\/new\.mp4/)
 })
 
-test('copied playback is a fallback for failed and cancelled own tasks, and own completion wins', () => {
+test('copied playback is a fallback after terminal own-task failure, while processing hides old media', () => {
   const copy = { playback_video_generation_id: 41, video_url: '/static/original.mp4', omni_job_id: 9, status: 'failed' }
   const old = { id: 7, status: 'completed', videoUrl: '/static/unrelated.mp4' }
   assert.equal(resolveShotPreviewJob([old], null, copy.omni_job_id, copy.playback_video_generation_id), null)
-  for (const status of ['processing', 'failed', 'cancelled']) {
+  const processing = { id: 9, status: 'processing', videoUrl: '' }
+  assert.equal(resolveShotPreviewJob([old, processing], null, 9, 41), processing)
+  assert.equal(shotPreviewVideoUrl(processing, copy), '')
+  for (const status of ['failed', 'cancelled']) {
     const own = { id: 9, status, videoUrl: '' }
-    assert.equal(shotPreviewVideoUrl(resolveShotPreviewJob([old, own], null, 9, 41), copy), copy.video_url)
+    assert.equal(resolveShotPreviewJob([old, own], null, 9, 41), own)
+    assert.equal(shotPreviewVideoUrl(own, copy), copy.video_url)
   }
   const finished = { id: 9, status: 'completed', videoUrl: '/static/new.mp4' }
   assert.equal(shotPreviewVideoUrl(resolveShotPreviewJob([old, finished], null, 9, 41), copy), finished.videoUrl)
+})
+
+test('copied playback history can drive read-only version actions before regeneration', () => {
+  const playback = { id: 'video-41', video_generation_id: 41, status: 'completed', videoUrl: '/static/original.mp4', is_playback_reference: true }
+  const shot = { playback_video_generation_id: 41, video_url: '/static/original.mp4' }
+  for (const projectMode of [false, true]) {
+    const job = resolveShotPreviewJob([playback], null, null, shot.playback_video_generation_id, projectMode)
+    assert.equal(job, playback)
+    assert.equal(job.is_playback_reference, true)
+    assert.equal(shotPreviewVideoUrl(job, shot), '/static/original.mp4')
+  }
 })
 
 test('project current adoption wins over newer historical videos while explicit preview still works', () => {
