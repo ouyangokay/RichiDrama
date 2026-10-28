@@ -231,16 +231,18 @@ import { beginAssetPointerDrag, shouldSuppressAssetClick } from '@/utils/assetPo
 
 const componentProps = defineProps({ projectEpisodeId: { type: [Number, String], default: null }, projectDramaId: { type: [Number, String], default: null }, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['reordered', 'changed'])
+const route = useRoute()
 const assets = ref([]), capabilities = ref([]), jobs = ref([]), sequence = ref(null), shots = ref([]), activeShotId = ref(null), projects = ref([]), freeProjectId = ref(null)
 const workspaceReady = ref(false)
 const mobileWorkspaceTab = ref('stage')
-const videoStatusPreviewEnabled = import.meta.env.DEV
+// Development status previews are opt-in so normal entry into Omni creation
+// does not expose fake progress/error controls in the real workbench.
+const videoStatusPreviewEnabled = import.meta.env.DEV && route.query.preview_status === '1'
 const previewVideoError = ref(false)
 const previewVideoProgress = ref(false)
 const previewRealPersonErrorJob = Object.freeze({ id: 'DEV-PREVIEW', status: 'failed', error_msg: "input image 'content[5]' may contain real person. Request id: 02178652123456789abcdef0123456789be64", real_person_failure_asset: { provider_content_index: 5, reference_image_number: 5, found: true, alias: '角色参考图 5', asset_id: null, in_asset_library: false, preview_url: '/style-thumbs/cinematic.jpg', can_import: true } })
 const previewCopyrightErrorJob = Object.freeze({ id: 'DEV-COPYRIGHT-PREVIEW', status: 'failed', error_msg: 'The request failed because the output video may be related to copyright restrictions. Request id: 02178831456822500000000000000000000ffffac177f50c31ca8', copyright_failure_asset_summary: { total: 18, in_asset_library: 3, importable: 14, unavailable: 1 } })
 const previewVideoErrorJob = computed(() => previewVideoError.value === 'copyright' ? previewCopyrightErrorJob : previewRealPersonErrorJob)
-const route = useRoute()
 const router = useRouter()
 const embedded = computed(() => componentProps.embedded)
 const projectEpisodeId = computed(() => Number(componentProps.projectEpisodeId || route.query.episode_id || 0))

@@ -107,11 +107,16 @@ function createShot(db, sequenceId, body, storageRoot = null) {
     const source = db.prepare(`SELECT s.* FROM omni_video_sequence_shots s JOIN omni_video_sequences q ON q.id=s.sequence_id
       WHERE s.id=? AND s.sequence_id=? AND s.deleted_at IS NULL AND q.deleted_at IS NULL`).get(Number(body.copy_source_shot_id), Number(sequenceId));
     if (!source || (body.after_shot_id && Number(body.after_shot_id) !== Number(source.id))) throw new Error('复制来源镜头不存在');
-    const bound = source.omni_job_id && db.prepare(`SELECT v.id FROM omni_video_jobs j JOIN video_generations v ON v.id=j.video_generation_id
+    const bound = source.omni_job_id && db.prepare(`SELECT v.id, v.status FROM omni_video_jobs j JOIN video_generations v ON v.id=j.video_generation_id
       WHERE j.id=? AND j.sequence_id=? AND j.shot_id=? AND v.deleted_at IS NULL`).get(source.omni_job_id, Number(sequenceId), source.id);
     const videoService = require('./videoService');
-    const playback = videoService.playbackGeneration(db, bound?.id, storageRoot)
-      || videoService.playbackGeneration(db, source.playback_video_generation_id, storageRoot);
+    const { ACTIVE_VIDEO_STATUSES } = require('./generationSubmissionGuard');
+    const sourceHasActiveTask = ACTIVE_VIDEO_STATUSES.includes(String(bound?.status || ''));
+    // Only the source shot's currently bound job participates in this
+    // decision. The copied row intentionally omits omni_job_id, and an active
+    // bound generation makes every playback fallback ineligible.
+    const playback = sourceHasActiveTask ? null : (videoService.playbackGeneration(db, bound?.id, storageRoot)
+      || videoService.playbackGeneration(db, source.playback_video_generation_id, storageRoot));
     const stamp = now();
     const out = db.prepare(`INSERT INTO omni_video_sequence_shots
       (sequence_id, title, sort_order, prompt, prompt_document_json, assets_json, settings_json, playback_video_generation_id, created_at, updated_at)

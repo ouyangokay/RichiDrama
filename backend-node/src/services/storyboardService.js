@@ -433,7 +433,20 @@ function copyStoryboard(db, log, sourceId, storageRoot = null) {
     const source = db.prepare('SELECT * FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(sourceId));
     if (!source) return null;
     const videoService = require('./videoService');
-    let adopted = videoService.playbackGeneration(db, source.active_video_generation_id, storageRoot);
+    const { ACTIVE_VIDEO_STATUSES } = require('./generationSubmissionGuard');
+    let activeGeneration = null;
+    if (source.active_video_generation_id) {
+      try {
+        activeGeneration = db.prepare(`SELECT id, status FROM video_generations
+          WHERE id=? AND deleted_at IS NULL`).get(Number(source.active_video_generation_id));
+      } catch (error) { if (!/no such (?:table|column)/i.test(error.message)) throw error; }
+    }
+    const sourceHasActiveTask = ACTIVE_VIDEO_STATUSES.includes(String(activeGeneration?.status || ''));
+    // An active source generation makes both current-generation adoption and
+    // playback fallback ineligible for the copy. The copied storyboard never
+    // receives active_video_generation_id because that column is excluded from
+    // copyColumns; playback is explicitly forced to NULL below.
+    let adopted = sourceHasActiveTask ? null : videoService.playbackGeneration(db, source.active_video_generation_id, storageRoot);
     // Legacy current adoption may be recorded only by its exact local file.
     // Do not infer it from the newest history entry or an ambiguous path.
     if (!adopted && !source.active_video_generation_id && source.local_path) {
@@ -443,7 +456,7 @@ function copyStoryboard(db, log, sourceId, storageRoot = null) {
         if (matches.length === 1) adopted = videoService.playbackGeneration(db, matches[0].id, storageRoot);
       } catch (error) { if (!/no such (?:table|column)/i.test(error.message)) throw error; }
     }
-    adopted ||= videoService.playbackGeneration(db, source.playback_video_generation_id, storageRoot);
+    if (!sourceHasActiveTask) adopted ||= videoService.playbackGeneration(db, source.playback_video_generation_id, storageRoot);
     db.prepare(
       'UPDATE storyboards SET storyboard_number = storyboard_number + 1, updated_at = ? WHERE episode_id = ? AND storyboard_number > ? AND deleted_at IS NULL'
     ).run(now, source.episode_id, source.storyboard_number);

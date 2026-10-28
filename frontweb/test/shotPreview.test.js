@@ -54,6 +54,21 @@ test('existing adopted and legacy videos remain available without an active task
   assert.equal(shotPreviewVideoUrl(null, { ...shot, status: 'processing' }), '')
 })
 
+test('a copied shot without playback stays blank after refresh', () => {
+  const copied = { playback_video_generation_id: null, video_url: '', status: 'pending' }
+  assert.equal(resolveShotPreviewJob([], null, null, null, true), null)
+  assert.equal(shotPreviewVideoUrl(null, copied), '')
+})
+
+test('a copied shot never falls back to source media across active stages', () => {
+  const copied = { playback_video_generation_id: null, video_url: '/static/source.mp4', status: 'pending' }
+  for (const status of activeGenerationStatuses) {
+    const job = { id: 2, status, videoUrl: '' }
+    assert.equal(resolveShotPreviewJob([job], null, null, null, true), job, status)
+    assert.equal(shotPreviewVideoUrl(job, copied), '', status)
+  }
+})
+
 test('polling keeps the selected Omni job identity when the video generation ID differs', () => {
   const pending = normalizeJob({ id: 20, video_generation_id: 30, generation: { id: 30, status: 'processing' } })
   assert.equal(pending.id, 20)
