@@ -383,12 +383,26 @@ function useImageProxyForVideo() {
 /**
  * 火山方舟 Seedance 全能/多图参考：公网 URL 直传；本地图默认 base64；可选图床（use_for_video）
  */
-async function resolveVolcOmniImageAsync(rawUrl, files_base_url, storage_local_path, log, video_gen_id, index) {
+async function resolveVolcOmniImageAsync(rawUrl, files_base_url, storage_local_path, log, video_gen_id, index, referenceImageInput) {
   const raw = (rawUrl || '').trim();
   if (!raw) return null;
   // ModelArk certified references are provider-native and must not become base64.
   if (raw.startsWith('asset://')) return raw;
   if (raw.startsWith('data:')) return raw;
+
+  const localFile = safeSeedanceLocalImagePath(storage_local_path, referenceImageInput?.local_path);
+  if (localFile) {
+    const stat = fs.statSync(localFile);
+    const mime = seedanceImageMimeFromPath(localFile);
+    const buffer = fs.readFileSync(localFile);
+    log.info('[VolcOmni] 公网参考图存在本地副本，已优先转 base64', {
+      video_gen_id,
+      index,
+      local_path: String(referenceImageInput.local_path).replace(/\\/g, '/'),
+      file_size: stat.size,
+    });
+    return `data:${mime};base64,${buffer.toString('base64')}`;
+  }
 
   const isPublicHttp = /^https?:\/\//i.test(raw) && !/localhost|127\.0\.0\.1/i.test(raw);
   if (isPublicHttp) return raw;
@@ -431,9 +445,30 @@ function seedanceImageNeedsNormalization(input) {
 function safeSeedanceLocalImagePath(storageLocalPath, localPath) {
   if (!storageLocalPath || !localPath) return null;
   const root = path.resolve(storageLocalPath);
-  const candidate = path.resolve(root, String(localPath).replace(/^[/\\]+/, ''));
-  if (candidate !== root && !candidate.startsWith(root + path.sep)) return null;
-  return fs.statSync(candidate, { throwIfNoEntry: false })?.isFile() ? candidate : null;
+  const rootReal = fs.realpathSync(root, { throwIfNoEntry: false });
+  if (!rootReal) return null;
+  const candidate = path.resolve(rootReal, String(localPath).replace(/^[/\\]+/, ''));
+  if (candidate !== rootReal && !candidate.startsWith(rootReal + path.sep)) return null;
+  const stat = fs.statSync(candidate, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return null;
+  const candidateReal = fs.realpathSync(candidate, { throwIfNoEntry: false });
+  if (!candidateReal || (candidateReal !== rootReal && !candidateReal.startsWith(rootReal + path.sep))) return null;
+  return candidateReal;
+}
+
+function seedanceImageMimeFromPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return {
+    '.avif': 'image/avif',
+    '.bmp': 'image/bmp',
+    '.gif': 'image/gif',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.png': 'image/png',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.webp': 'image/webp',
+  }[ext] || 'image/jpeg';
 }
 
 async function loadSeedanceImageBuffer(resolvedUrl, input, storageLocalPath) {
@@ -712,7 +747,8 @@ async function callVolcengineOmniVideoApi(config, log, opts) {
         storage_local_path,
         log,
         video_gen_id,
-        i
+        i,
+        referenceImageInputs[i]
       );
       if (!u) continue;
       u = await normalizeSeedanceImageForModel(

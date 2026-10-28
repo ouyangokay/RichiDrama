@@ -176,6 +176,42 @@ test('Seedance omni converts a library relative path to a data URL before sendin
   }
 });
 
+test('Seedance omni prefers a valid local copy over a public model URL', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'local-mini-drama-omni-local-copy-'));
+  const relativePath = 'library/images/local-copy.webp';
+  const imagePath = path.join(root, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+  const imageBytes = Buffer.from('local-reference-image');
+  fs.writeFileSync(imagePath, imageBytes);
+
+  const originalFetch = global.fetch;
+  const calls = [];
+  const logs = [];
+  global.fetch = async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    return { ok: true, text: async () => JSON.stringify({ id: 'task-local-copy', status: 'processing' }) };
+  };
+  try {
+    await callVolcengineOmniVideoApi({
+      base_url: 'https://video.example.test', api_key: 'test-key', model: ['seedance-2.0'], default_model: 'seedance-2.0',
+    }, { info: (...args) => logs.push(args), warn() {}, error() {} }, {
+      prompt: '本地副本优先', model: 'seedance-2.0', duration: 5, aspect_ratio: '16:9',
+      reference_urls: ['https://cdn.example.test/unstable.webp'],
+      reference_image_inputs: [{ local_path: relativePath, file_size: imageBytes.length }],
+      storage_local_path: root, video_gen_id: 4871,
+    });
+
+    const referenceUrl = calls[0].body.content.find((item) => item.role === 'reference_image').image_url.url;
+    assert.match(referenceUrl, /^data:image\/webp;base64,/);
+    assert.equal(Buffer.from(referenceUrl.slice(referenceUrl.indexOf(',') + 1), 'base64').toString(), imageBytes.toString());
+    assert.equal(logs[0][0], '[VolcOmni] 公网参考图存在本地副本，已优先转 base64');
+    assert.deepEqual(logs[0][1], { video_gen_id: 4871, index: 0, local_path: relativePath, file_size: imageBytes.length });
+  } finally {
+    global.fetch = originalFetch;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Seedance omni replaces an oversized reference with a controlled JPEG copy', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'local-mini-drama-omni-large-'));
   const relativePath = 'library/images/oversized.png';
