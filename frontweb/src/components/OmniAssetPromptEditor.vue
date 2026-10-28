@@ -223,25 +223,23 @@ function insertAsset(asset, opts = {}) {
   const explicitOffset = Number.isFinite(Number(opts.offset)) ? Number(opts.offset) : null
   const mention = explicitOffset == null ? activeMentionRange() : null
   const scrollPosition = { top: editorRef.value?.scrollTop || 0, left: editorRef.value?.scrollLeft || 0 }
-  let caret = null
+  let source = text.value
+  let insertionOffset = null
   if (explicitOffset != null) {
-    const inserted = insertTokenAtOffset(text.value, token, explicitOffset)
-    text.value = inserted.text
-    lastCaretOffset.value = inserted.caret
-    caret = inserted.caret
+    insertionOffset = explicitOffset
   } else if (mention) {
     // Replace exactly the @ token around the caret, including one in the
-    // middle of a sentence, then leave the cursor immediately after it.
-    const suffix = text.value.slice(mention.end)
-    const separator = suffix && !/^\s/.test(suffix) ? ' ' : ''
-    text.value = `${text.value.slice(0, mention.start)}${token}${separator}${suffix}`
-    caret = mention.start + token.length + separator.length
-    lastCaretOffset.value = caret
+    // middle of a sentence. The shared insertion helper owns all whitespace
+    // and newline-boundary behavior for picker, button and drag entry points.
+    source = `${text.value.slice(0, mention.start)}${text.value.slice(mention.end)}`
+    insertionOffset = mention.start
   } else if (opts.append) {
-    text.value = `${text.value}${text.value && !/\s$/.test(text.value) ? ' ' : ''}${token} `
-    caret = text.value.length
-    lastCaretOffset.value = caret
+    insertionOffset = text.value.length
   } else return
+  const inserted = insertTokenAtOffset(source, token, insertionOffset)
+  text.value = inserted.text
+  const caret = inserted.caret
+  lastCaretOffset.value = caret
   emit('update:modelValue', text.value)
   // 这里以前同时执行了多次 render + focusEditorEnd；任一次聚焦末尾都会
   // 让长提示词的内部滚动条跳回顶部。插入后只重绘一次，并恢复原视口。
@@ -274,14 +272,38 @@ function matchingAsset(alias, occurrence = 0) {
   const matches = (props.assets || []).filter((asset) => asset && assetMatchesAlias(asset, alias))
   return matches.length === 1 ? matches[0] : null
 }
+const EDITOR_LINE_BLOCKS = new Set(['DIV', 'P'])
+function isEditorLineBlock(node) {
+  return node?.nodeType === Node.ELEMENT_NODE && EDITOR_LINE_BLOCKS.has(node.tagName)
+}
+function isPlaceholderBreak(nodes) {
+  return nodes.length === 1 && nodes[0]?.nodeType === Node.ELEMENT_NODE && nodes[0].tagName === 'BR'
+}
+function serializeNodes(nodes) {
+  const parts = [...(nodes || [])].map((node) => ({
+    lineBlock: isEditorLineBlock(node),
+    value: serializeNode(node),
+  }))
+  return parts.reduce((value, part, index) => {
+    // contenteditable may represent a line either as a BR or as a DIV/P.
+    // A block's sole BR is only an empty-line placeholder; the block boundary
+    // itself contributes the newline so the placeholder must not add another.
+    const previous = parts[index - 1]
+    const needsBoundary = previous && (previous.lineBlock || part.lineBlock)
+      && !previous.value.endsWith('\n') && !part.value.startsWith('\n')
+    return `${value}${needsBoundary ? '\n' : ''}${part.value}`
+  }, '')
+}
 function serializeNode(node) {
   if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || ''
   if (node.nodeType !== Node.ELEMENT_NODE) return ''
   if (node.dataset?.token) return node.dataset.token
   if (node.tagName === 'BR') return '\n'
-  return [...node.childNodes].map(serializeNode).join('')
+  const children = [...node.childNodes]
+  if (isEditorLineBlock(node) && isPlaceholderBreak(children)) return ''
+  return serializeNodes(children)
 }
-function serializeEditor() { return [...(editorRef.value?.childNodes || [])].map(serializeNode).join('') }
+function serializeEditor() { return serializeNodes(editorRef.value?.childNodes) }
 // 记录上一次真正重建 DOM 时的引用解析结果。references 事件会让父组件
 // 原样回传新的 promptDocument 对象，deep watcher 随之在每次按键后走到这里；
 // 若 DOM 与目标文本一致且引用解析未变就跳过 replaceChildren——脚本改写
@@ -328,7 +350,7 @@ function caretOffset() {
   if (!el || !selection?.rangeCount || !el.contains(selection.anchorNode)) return String(text.value || '').length
   const range = selection.getRangeAt(0).cloneRange(); range.selectNodeContents(el); range.setEnd(selection.anchorNode, selection.anchorOffset)
   const holder = document.createElement('div'); holder.append(range.cloneContents())
-  return [...holder.childNodes].map(serializeNode).join('').length
+  return serializeNodes(holder.childNodes).length
 }
 function focusEditorEnd() {
   const el = editorRef.value; if (!el) return; el.focus()
@@ -461,12 +483,17 @@ function focusEditorAtOffset(offset, scrollPosition) {
   const range = document.createRange()
   let consumed = 0
   let placed = false
+  let placedOffset = target
   for (let index = 0; index < el.childNodes.length; index += 1) {
     const node = el.childNodes[index]
     const length = serializeNode(node).length
     if (target <= consumed + length) {
       if (node.nodeType === Node.TEXT_NODE) range.setStart(node, Math.max(0, Math.min(node.nodeValue?.length || 0, target - consumed)))
-      else range.setStart(el, target === consumed ? index : index + 1)
+      else {
+        const beforeToken = target === consumed
+        range.setStart(el, beforeToken ? index : index + 1)
+        placedOffset = beforeToken ? consumed : consumed + length
+      }
       placed = true
       break
     }
@@ -481,7 +508,7 @@ function focusEditorAtOffset(offset, scrollPosition) {
   // 原位置可避免在提示词底部插入时预览面跳回顶部。
   el.scrollTop = scrollPosition?.top || 0
   el.scrollLeft = scrollPosition?.left || 0
-  lastCaretOffset.value = target
+  lastCaretOffset.value = placedOffset
 }
 
 function restoreEditorAfterInsert(caret, scrollPosition) {
@@ -497,7 +524,7 @@ function offsetForRange(range) {
   before.setEnd(range.startContainer, range.startOffset)
   const holder = document.createElement('div')
   holder.append(before.cloneContents())
-  return [...holder.childNodes].map(serializeNode).join('').length
+  return serializeNodes(holder.childNodes).length
 }
 
 function textareaPointFromEvent(event) {
