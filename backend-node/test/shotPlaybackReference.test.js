@@ -100,6 +100,21 @@ test('invalid source does not produce a playback reference and copy failure roll
   } finally { f.close(); }
 });
 
+test('free copy does not inherit playback while its source job is active', () => {
+  const f = fixture();
+  try {
+    f.db.prepare("INSERT INTO video_generations VALUES (42,'processing',NULL,NULL,NULL,NULL,NULL)").run();
+    f.db.prepare('INSERT INTO omni_video_jobs VALUES (8,1,1,42)').run();
+    f.db.prepare('UPDATE omni_video_sequence_shots SET omni_job_id=8, playback_video_generation_id=41 WHERE id=1').run();
+    for (const status of ['sd2_waiting', 'processing', 'upscale_pending', 'upscaling', 'interpolation_pending', 'interpolating', 'persisting']) {
+      f.db.prepare('UPDATE video_generations SET status=? WHERE id=42').run(status);
+      const copy = sequences.createShot(f.db, 1, { after_shot_id: 1, copy_source_shot_id: 1 }, f.root);
+      assert.equal(copy.playback_video_generation_id, null, status);
+      assert.equal(copy.video_url, null, status);
+    }
+  } finally { f.close(); }
+});
+
 test('immediate writers serialize copy and deletion; only live references block deletion', () => {
   const f = fixture();
   const other = new Database(path.join(f.root, 'test.db'));

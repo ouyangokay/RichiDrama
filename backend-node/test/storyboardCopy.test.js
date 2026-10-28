@@ -147,6 +147,59 @@ test('copy pins the adopted local video without copying generation ownership or 
   } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('copy does not inherit playback while the source generation is active', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-active-'));
+  const db = createDb();
+  try {
+    db.exec(`ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+      CREATE TABLE video_generations (id INTEGER PRIMARY KEY, status TEXT, local_path TEXT, poster_local_path TEXT, deleted_at TEXT);`);
+    fs.mkdirSync(path.join(root, 'videos'));
+    fs.writeFileSync(path.join(root, 'videos', 'old.mp4'), 'old video');
+    db.prepare("INSERT INTO video_generations VALUES (41,'completed','videos/old.mp4',NULL,NULL),(42,'processing',NULL,NULL,NULL)").run();
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title,active_video_generation_id,playback_video_generation_id,status) VALUES (1,1,'源',42,41,'processing')").run();
+    for (const status of ['sd2_waiting', 'processing', 'upscale_pending', 'upscaling', 'interpolation_pending', 'interpolating', 'persisting']) {
+      db.prepare('UPDATE video_generations SET status=? WHERE id=42').run(status);
+      assert.equal(copyStoryboard(db, log, 1, root).playback_video_generation_id, null, status);
+    }
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a copied storyboard stays independent after the source task completes a new version', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-independent-'));
+  const db = createDb();
+  try {
+    db.exec(`ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+      CREATE TABLE video_generations (id INTEGER PRIMARY KEY, status TEXT, local_path TEXT, poster_local_path TEXT, deleted_at TEXT);`);
+    fs.mkdirSync(path.join(root, 'videos'));
+    fs.writeFileSync(path.join(root, 'videos', 'old.mp4'), 'old video');
+    fs.writeFileSync(path.join(root, 'videos', 'new.mp4'), 'new video');
+    db.prepare("INSERT INTO video_generations VALUES (41,'completed','videos/old.mp4',NULL,NULL),(42,'processing',NULL,NULL,NULL)").run();
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title,active_video_generation_id,playback_video_generation_id,status) VALUES (1,1,'源',42,41,'processing')").run();
+    const copy = copyStoryboard(db, log, 1, root);
+    db.prepare("UPDATE video_generations SET status='completed', local_path='videos/new.mp4' WHERE id=42").run();
+    db.prepare("UPDATE storyboards SET status='completed', video_url='/static/videos/new.mp4', local_path='videos/new.mp4' WHERE id=1").run();
+    const copied = db.prepare('SELECT playback_video_generation_id, video_url, local_path FROM storyboards WHERE id=?').get(copy.id);
+    assert.deepEqual(copied, { playback_video_generation_id: null, video_url: null, local_path: null });
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('copy keeps playback for non-active source generation states', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-state-boundary-'));
+  const db = createDb();
+  try {
+    db.exec(`ALTER TABLE storyboards ADD COLUMN playback_video_generation_id INTEGER;
+      CREATE TABLE video_generations (id INTEGER PRIMARY KEY, status TEXT, local_path TEXT, poster_local_path TEXT, deleted_at TEXT);`);
+    fs.mkdirSync(path.join(root, 'videos'));
+    fs.writeFileSync(path.join(root, 'videos', 'old.mp4'), 'old video');
+    db.prepare("INSERT INTO video_generations VALUES (40,'completed','videos/old.mp4',NULL,NULL),(41,'processing',NULL,NULL,NULL)").run();
+    db.prepare("INSERT INTO storyboards (episode_id,storyboard_number,title,active_video_generation_id,playback_video_generation_id,status) VALUES (1,1,'源',41,40,'processing')").run();
+    for (const status of ['completed', 'failed', 'retryable', 'unknown', 'billing_reconciliation']) {
+      db.prepare('UPDATE video_generations SET status=? WHERE id=41').run(status);
+      assert.equal(copyStoryboard(db, log, 1, root).playback_video_generation_id, 40, status);
+    }
+  } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('copy does not reference an incomplete, deleted or missing local source', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-copy-invalid-'));
   const db = createDb();
