@@ -128,6 +128,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { omniVideoAPI } from '@/api/omniVideo'
+import { copyText } from '@/utils/clipboard'
 import { safeRedirectPath } from '@/utils/routeRecovery'
 import { formatChinaDateTime } from '@/utils/time'
 
@@ -151,7 +152,7 @@ async function loadDetail() {
 }
 function goBack() { router.push(safeRedirectPath(route.query.return_to, '/free-create')) }
 async function copyPrompt(text) {
-  try { await navigator.clipboard.writeText(String(text || '')); ElMessage.success('已复制原始提示词') }
+  try { await copyText(text); ElMessage.success('已复制原始提示词') }
   catch (_) { ElMessage.error('复制失败，请手动选择提示词') }
 }
 function value(input) { return input === null || input === undefined || input === '' ? '—' : String(input) }
